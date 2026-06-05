@@ -2,11 +2,16 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
+using PampelGames.GoreSimulator;
 
 public class EnemyHealth : MonoBehaviour
 {
     public float maxHealth = 100f;
     private float currentHealth;
+
+    [Header("KriptoFX Death Blood Pool")]
+    [Tooltip("Trascina qui alcuni prefab da: Assets/KriptoFX/VolumetricBloodFX/Prefabs/ (Blood1-Blood15)")]
+    public GameObject[] deathBloodPrefabs;
     private Animator animator;
     private NavMeshAgent agent;
     private Rigidbody[] ragdollRigidbodies;
@@ -157,6 +162,9 @@ public class EnemyHealth : MonoBehaviour
         EnemyAI enemyAI = GetComponent<EnemyAI>();
         if (enemyAI != null) enemyAI.enabled = false;
 
+        // Pool di sangue a terra dalla morte (KriptoFX)
+        SpawnDeathBloodPool();
+
         // Forza tutti i SkinnedMeshRenderer ad aggiornarsi sempre.
         // Con updateWhenOffscreen=false (default Unity), quando le ossa del busto
         // escono dai bounds cached della mesh, Unity smette di deformare la mesh
@@ -169,6 +177,33 @@ public class EnemyHealth : MonoBehaviour
             hr.ResetReaction();
 
         StartCoroutine(ActivateRagdollNextFrame());
+    }
+
+    void SpawnDeathBloodPool()
+    {
+        if (deathBloodPrefabs == null || deathBloodPrefabs.Length == 0) return;
+
+        // Trova il pavimento sotto i piedi dello zombi
+        Vector3 origin = transform.position + Vector3.up * 0.1f;
+        if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 2f,
+                ~(1 << 2), QueryTriggerInteraction.Ignore)) return;
+        if (hit.collider.GetComponentInParent<EnemyHealth>() != null) return;
+
+        var prefab = deathBloodPrefabs[Random.Range(0, deathBloodPrefabs.Length)];
+        if (prefab == null) return;
+
+        float angle = Mathf.Atan2(hit.normal.x, hit.normal.z) * Mathf.Rad2Deg + 180f;
+        GameObject go = Instantiate(prefab, hit.point, Quaternion.Euler(0, angle + 90f, 0));
+        go.transform.localScale = Vector3.one * Random.Range(1.2f, 2.0f);   // pool grande
+
+        var settings = go.GetComponent<BFX_BloodSettings>();
+        if (settings != null)
+        {
+            settings.AutomaticGroundHeightDetection = true;
+            settings.AnimationSpeed = Random.Range(0.6f, 1.0f);   // lento = più drammatico
+        }
+
+        Destroy(go, 30f);
     }
 
     IEnumerator ActivateRagdollNextFrame()
@@ -196,6 +231,10 @@ public class EnemyHealth : MonoBehaviour
 
         DetachBoneDecals();
         SetRagdollActive(true);
+
+        // Gore Simulator: segnala la morte DOPO che il ragdoll BNG è attivo.
+        // Non chiamiamo ExecuteRagdoll() perché conflitterebbe con il nostro ragdoll.
+        // Usiamo NotifyDeath() se esiste, altrimenti ignoriamo.
 
         // --- DIAGNOSTICA POST-ATTIVAZIONE ---
         foreach (Rigidbody rb in ragdollRigidbodies)

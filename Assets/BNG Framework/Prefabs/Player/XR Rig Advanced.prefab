@@ -15173,7 +15173,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   MoveCharacterWithCamera: 1
   RotateCharacterWithCamera: 1
-  ResizeCharacterHeightWithCamera: 1
+  ResizeCharacterHeightWithCamera: 0
   TrackingSpace: {fileID: 2683195716759056386}
   CameraRig: {fileID: 2683195716758988408}
   CenterEyeAnchor: {fileID: 2683195716758988412}
@@ -19583,15 +19583,15 @@ MonoBehaviour:
   LeftGrabber: {fileID: 6969157712627478182}
   RightGrabber: {fileID: 8516297022294291282}
   AmmoDispenserObject: {fileID: 5713814142994353100}
-  PistolClip: {fileID: 3771612126134880053, guid: d67544e4468dd0748a81cca8dafdb14b,
+  PistolClip: {fileID: 100100000, guid: 730f28aa494403b4cb40ca4b10aabadf,
     type: 3}
   ShotgunShell: {fileID: 9048278835047995880, guid: 40171d90eb0131e4ba4e6b623bdb9884,
     type: 3}
   RifleClip: {fileID: 3393538753761876036, guid: 0116c3965a703db4cb19d8b573a7531b,
     type: 3}
-  CurrentPistolClips: 5
-  CurrentRifleClips: 5
-  CurrentShotgunShells: 30
+  CurrentPistolClips: 999
+  CurrentRifleClips: 999
+  CurrentShotgunShells: 999
 --- !u!1 &2619929306304362989
 GameObject:
   m_ObjectHideFlags: 0
