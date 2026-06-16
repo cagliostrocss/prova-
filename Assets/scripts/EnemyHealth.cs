@@ -18,6 +18,7 @@ public class EnemyHealth : MonoBehaviour
     private Collider[] ragdollColliders;
 
     public bool IsDead { get; private set; }
+    private bool _trailStarted = false;
 
     void Start()
     {
@@ -75,6 +76,7 @@ public class EnemyHealth : MonoBehaviour
     {
         if (IsDead) return;
         currentHealth -= damage;
+        Debug.Log($"[EnemyHealth] TakeDamage {damage} → HP rimanenti: {currentHealth}");
         if (currentHealth <= 0) Die();
     }
 
@@ -82,11 +84,15 @@ public class EnemyHealth : MonoBehaviour
     {
         if (IsDead) return;
         currentHealth -= damage;
+        Debug.Log($"[EnemyHealth] TakeDamage {damage} su '{hitCollider.name}' → HP rimanenti: {currentHealth}");
 
         HitReaction hitReaction = hitCollider.GetComponent<HitReaction>();
         if (hitReaction == null)
             hitReaction = FindNearestBoneHitReaction(hitPoint);
         hitReaction?.ApplyHitForce(hitDirection, 150f);
+
+        // [3] Avvia scia di sangue al primo colpo ricevuto
+        if (!_trailStarted) { _trailStarted = true; StartCoroutine(BloodTrailCoroutine()); }
 
         if (currentHealth <= 0) Die();
     }
@@ -158,6 +164,7 @@ public class EnemyHealth : MonoBehaviour
     void Die()
     {
         IsDead = true;
+        Debug.Log("[EnemyHealth] Die() chiamato — zombi morto.");
         if (agent != null) agent.enabled = false;
         EnemyAI enemyAI = GetComponent<EnemyAI>();
         if (enemyAI != null) enemyAI.enabled = false;
@@ -183,27 +190,64 @@ public class EnemyHealth : MonoBehaviour
     {
         if (deathBloodPrefabs == null || deathBloodPrefabs.Length == 0) return;
 
-        // Trova il pavimento sotto i piedi dello zombi
         Vector3 origin = transform.position + Vector3.up * 0.1f;
-        if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 2f,
+        if (!Physics.Raycast(origin, Vector3.down, out RaycastHit groundHit, 2f,
                 ~(1 << 2), QueryTriggerInteraction.Ignore)) return;
-        if (hit.collider.GetComponentInParent<EnemyHealth>() != null) return;
+        if (groundHit.collider.GetComponentInParent<EnemyHealth>() != null) return;
 
-        var prefab = deathBloodPrefabs[Random.Range(0, deathBloodPrefabs.Length)];
-        if (prefab == null) return;
+        float baseAngle = Mathf.Atan2(groundHit.normal.x, groundHit.normal.z) * Mathf.Rad2Deg + 180f;
 
-        float angle = Mathf.Atan2(hit.normal.x, hit.normal.z) * Mathf.Rad2Deg + 180f;
-        GameObject go = Instantiate(prefab, hit.point, Quaternion.Euler(0, angle + 90f, 0));
-        go.transform.localScale = Vector3.one * Random.Range(1.2f, 2.0f);   // pool grande
-
-        var settings = go.GetComponent<BFX_BloodSettings>();
-        if (settings != null)
+        // [4] Spawn 3 pozze sovrapposte per una macchia di morte più grande e drammatica
+        int poolCount = 3;
+        for (int i = 0; i < poolCount; i++)
         {
-            settings.AutomaticGroundHeightDetection = true;
-            settings.AnimationSpeed = Random.Range(0.6f, 1.0f);   // lento = più drammatico
-        }
+            var prefab = deathBloodPrefabs[Random.Range(0, deathBloodPrefabs.Length)];
+            if (prefab == null) continue;
 
-        Destroy(go, 30f);
+            Vector3 offset = new Vector3(Random.Range(-0.15f, 0.15f), 0, Random.Range(-0.15f, 0.15f));
+            float angle    = baseAngle + Random.Range(-30f, 30f);
+            GameObject go  = Instantiate(prefab, groundHit.point + offset, Quaternion.Euler(0, angle + 90f, 0));
+            go.transform.localScale = Vector3.one * Random.Range(1.5f, 2.8f);
+
+            var settings = go.GetComponent<BFX_BloodSettings>();
+            if (settings != null)
+            {
+                settings.AutomaticGroundHeightDetection = true;
+                settings.AnimationSpeed = Random.Range(0.5f, 0.85f);
+            }
+
+            Destroy(go, 30f);
+        }
+    }
+
+    // [3] Scia di sangue: gocce piccole a terra mentre lo zombi cammina ferito
+    IEnumerator BloodTrailCoroutine()
+    {
+        if (deathBloodPrefabs == null || deathBloodPrefabs.Length == 0) yield break;
+
+        while (!IsDead)
+        {
+            yield return new WaitForSeconds(Random.Range(0.4f, 0.9f));
+            if (IsDead) break;
+
+            Vector3 origin = transform.position + Vector3.up * 0.1f;
+            if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 2f,
+                    ~(1 << 2), QueryTriggerInteraction.Ignore))
+            {
+                if (hit.collider.GetComponentInParent<EnemyHealth>() == null)
+                {
+                    var prefab = deathBloodPrefabs[Random.Range(0, deathBloodPrefabs.Length)];
+                    if (prefab != null)
+                    {
+                        GameObject drop = Instantiate(prefab, hit.point, Quaternion.Euler(0, Random.Range(0f, 360f), 0));
+                        drop.transform.localScale = Vector3.one * Random.Range(0.12f, 0.22f);
+                        var s = drop.GetComponent<BFX_BloodSettings>();
+                        if (s != null) { s.AutomaticGroundHeightDetection = true; s.AnimationSpeed = 1.5f; }
+                        Destroy(drop, 20f);
+                    }
+                }
+            }
+        }
     }
 
     IEnumerator ActivateRagdollNextFrame()
@@ -264,27 +308,6 @@ public class EnemyHealth : MonoBehaviour
         yield return new WaitForFixedUpdate();
         yield return new WaitForFixedUpdate();
 
-        // Posizione dopo la fisica (prima di LateUpdate)
-        foreach (Rigidbody rb in ragdollRigidbodies)
-        {
-            if (rb.gameObject == gameObject) continue;
-            if (rb.name == "mixamorig:Hips" || rb.name == "mixamorig:Spine")
-                Debug.Log($"[RD-3FX] {rb.name}: pos={rb.transform.position:F3} vel={rb.velocity:F3} |vel|={rb.velocity.magnitude:F3}");
-        }
-
-        // Traccia la posizione di Hips e Spine ogni 0.5s per 6 secondi
-        // per vedere se cadono fino a terra o rimangono in aria
-        for (int i = 0; i < 12; i++)
-        {
-            yield return new WaitForSeconds(0.5f);
-            foreach (Rigidbody rb in ragdollRigidbodies)
-            {
-                if (rb.gameObject == gameObject) continue;
-                if (rb.name == "mixamorig:Hips" || rb.name == "mixamorig:Spine")
-                    Debug.Log($"[RD-T{i * 0.5f:F1}s] {rb.name}: Y={rb.transform.position.y:F3} vel.y={rb.velocity.y:F3} kinematic={rb.isKinematic}");
-            }
-        }
-
-        Destroy(gameObject, 2f);
+        Destroy(gameObject, 5f);
     }
 }

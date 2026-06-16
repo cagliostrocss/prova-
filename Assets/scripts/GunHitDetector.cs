@@ -2,14 +2,6 @@ using UnityEngine;
 using BNG;
 using PampelGames.GoreSimulator;
 
-/// <summary>
-/// Gestisce danno + effetti visivi per ogni sparo.
-/// Chiamato da onShootEvent di RaycastWeapon (sempre attivo).
-///
-/// Zombi: decal scuro programmativo (NO prefab BNG → zero particelle arancioni)
-///        + splash di sangue + gocce che colano
-/// Muri : BulletHole BNG normale
-/// </summary>
 public class GunHitDetector : MonoBehaviour
 {
     [Tooltip("Punto bocca della canna. Se vuoto, cerca tra i figli.")]
@@ -17,23 +9,28 @@ public class GunHitDetector : MonoBehaviour
     public float damagePerShot = 25f;
     public float maxRange = 150f;
 
-    [Header("KriptoFX Blood Asset")]
-    [Tooltip("Trascina qui: Assets/KriptoFX/VolumetricBloodFX/Prefabs/AttachedBloodDecal.prefab")]
+    [Header("KriptoFX — Effetti sangue")]
+    [Tooltip("Prefab blood burst all'impatto: Assets/KriptoFX/VolumetricBloodFX/Prefabs/Blood1..Blood15")]
+    public GameObject[] hitBloodBurstPrefabs;
+
+    [Tooltip("Decal attaccato alla bone: Assets/KriptoFX/VolumetricBloodFX/Prefabs/AttachedBloodDecal.prefab")]
     public GameObject attachedBloodDecalPrefab;
 
-    [Tooltip("Trascina qui alcuni prefab da: Assets/KriptoFX/VolumetricBloodFX/Prefabs/SimplePlaneDecals/")]
+    [Tooltip("Schizzo a terra: Assets/KriptoFX/VolumetricBloodFX/Prefabs/SimplePlaneDecals/Blood1..Blood15")]
     public GameObject[] hitBloodSplatterPrefabs;
+
+    [Tooltip("Secondi minimi tra un colpo e il prossimo che applica danno. Previene raffica accidentale.")]
+    public float minTimeBetweenShots = 0.35f;
 
     private RaycastWeapon _weapon;
     private GameObject    _bulletHolePrefab;
     private Material      _bloodMat;
-    private Material      _woundMat;
-
-    // ─────────────────────────────────────────────────────────────────────────
+    private float         _lastDamageTime = -999f;
+    private int           _shotCount = 0;
+    private EnemyHealth   _trackedEnemy;
 
     void Start()
     {
-        // Auto-trova muzzle
         if (muzzlePoint == null)
         {
             foreach (string n in new[] { "Muzzle", "MuzzleFlash", "MuzzlePoint", "Barrel" })
@@ -44,7 +41,6 @@ public class GunHitDetector : MonoBehaviour
             if (muzzlePoint == null) muzzlePoint = transform;
         }
 
-        // Salva e azzera HitFXPrefab di RaycastWeapon
         _weapon = GetComponent<RaycastWeapon>();
         if (_weapon != null)
         {
@@ -52,18 +48,12 @@ public class GunHitDetector : MonoBehaviour
             _weapon.HitFXPrefab = null;
         }
 
-        _bloodMat = BuildMaterial(new Color(0.8f, 0f, 0f, 1f));
-
-        // Crea il materiale ferita con texture circolare generata in codice:
-        // il materiale BNG ha l'arancione baked nella texture → inutile sovrascrivere il colore.
-        // Con la nostra texture controlliamo esattamente forma e colore.
-        _woundMat = BuildCircularWoundMaterial();
+        _bloodMat = BuildBloodMaterial();
     }
 
     void OnDestroy()
     {
         if (_bloodMat != null) Destroy(_bloodMat);
-        if (_woundMat != null) Destroy(_woundMat);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -79,30 +69,40 @@ public class GunHitDetector : MonoBehaviour
         foreach (RaycastHit hit in hits)
         {
             if (hit.collider.GetComponentInParent<Projectile>() != null) continue;
-            if (hit.collider.GetComponentInParent<Bullet>()    != null) continue;
+            if (hit.collider.GetComponentInParent<Bullet>()     != null) continue;
 
             EnemyHealth enemy = hit.collider.GetComponentInParent<EnemyHealth>();
 
             if (enemy != null)
             {
+                if (enemy.IsDead) return;
+
+                // Rate limiter: ignora colpi troppo ravvicinati (arma automatica accidentale)
+                if (Time.time - _lastDamageTime < minTimeBetweenShots)
+                {
+                    Debug.Log($"[GHD] Colpo ignorato (troppo vicino: {(Time.time - _lastDamageTime)*1000:F0}ms < {minTimeBetweenShots*1000:F0}ms)");
+                    return;
+                }
+                _lastDamageTime = Time.time;
+
+                // Traccia i colpi su questo nemico (per decal che si accumulano)
+                if (enemy != _trackedEnemy) { _trackedEnemy = enemy; _shotCount = 0; }
+                _shotCount++;
+
+                // Rileva headshot (bone o collider il cui nome contiene "head")
+                bool isHeadshot = hit.collider.name.IndexOf("head", System.StringComparison.OrdinalIgnoreCase) >= 0;
+
                 enemy.TakeDamage(damagePerShot, muzzlePoint.forward, hit.point, hit.collider);
 
-                // Gore Simulator: taglia la bone più vicina al punto di impatto.
-                // 30% di probabilità per non smembrare lo zombi al primo colpo.
-                var gore = enemy.GetComponent<GoreSimulator>();
-                if (gore != null && Random.value < 0.15f)
-                    gore.ExecuteCut(hit.point, muzzlePoint.forward * 6f);
-
                 Transform bone = FindNearestBone(enemy, hit.point);
+                if (!isHeadshot && bone != null)
+                    isHeadshot = bone.name.IndexOf("head", System.StringComparison.OrdinalIgnoreCase) >= 0;
 
-                // Posizione ferita: bone center offset verso il player
-                // (NON usa hit.point del root collider che è troppo lontano/dentro la mesh)
-                Vector3 woundPos;
-                Vector3 woundNormal;
+                Vector3 woundPos, woundNormal;
                 if (bone != null)
                 {
                     Vector3 toShooter = (muzzlePoint.position - bone.position).normalized;
-                    woundPos   = bone.position + toShooter * 0.08f;
+                    woundPos   = bone.position + toShooter * 0.14f;
                     woundNormal = toShooter;
                 }
                 else
@@ -111,11 +111,10 @@ public class GunHitDetector : MonoBehaviour
                     woundNormal = hit.normal;
                 }
 
-                SpawnWoundDecal(woundPos, woundNormal, bone);
+                SpawnBloodBurst(woundPos, woundNormal, isHeadshot);
                 SpawnAttachedBloodDecal(woundPos, woundNormal, bone);
-                SpawnBloodBurst(woundPos, woundNormal);
-                if (bone != null) SpawnBloodDrip(bone, woundPos);
-                SpawnFloorBloodSplatter(enemy);
+                SpawnBloodDrip(bone, woundPos);
+                SpawnGroundBloodSplatter(enemy.transform.position);
             }
             else
             {
@@ -126,38 +125,53 @@ public class GunHitDetector : MonoBehaviour
         }
     }
 
-    // ── DECAL FERITA ──────────────────────────────────────────────────────────
-    // USA FleshWound.cs per il tracking: NON è figlio della bone nella gerarchia
-    // → DetachBoneDecals() non lo tocca → segue correttamente il ragdoll
+    // ── BURST DI SANGUE ALL'IMPATTO ───────────────────────────────────────────
+    // Usa KriptoFX Blood1-Blood15. Se non assegnati, fallback particelle.
+    // isHeadshot=true → burst extra più grande + scala maggiore.
+    // Sempre spawna un piccolo burst "uscita proiettile" sul lato opposto.
 
-    void SpawnWoundDecal(Vector3 worldPos, Vector3 normal, Transform bone)
+    void SpawnBloodBurst(Vector3 worldPos, Vector3 normal, bool isHeadshot = false)
     {
-        GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        Destroy(quad.GetComponent<MeshCollider>());
-
-        float size = Random.Range(0.07f, 0.12f);   // visibile in VR
-        quad.transform.localScale = Vector3.one * size;
-
-        var rend = quad.GetComponent<Renderer>();
-        if (_woundMat != null) rend.material = _woundMat;
-
-        // FleshWound traccia la bone via LateUpdate senza SetParent
-        // → invisibile a DetachBoneDecals (non è nella gerarchia delle ossa)
-        var wound = quad.AddComponent<FleshWound>();
-        if (bone != null)
-            wound.Init(bone, worldPos, Quaternion.LookRotation(normal), 30f);
-        else
+        if (hitBloodBurstPrefabs != null && hitBloodBurstPrefabs.Length > 0)
         {
-            quad.transform.position = worldPos;
-            quad.transform.rotation = Quaternion.LookRotation(normal);
-            Destroy(quad, 10f);
+            var prefab = hitBloodBurstPrefabs[Random.Range(0, hitBloodBurstPrefabs.Length)];
+            if (prefab != null)
+            {
+                // [1] Burst principale (entrata proiettile)
+                Quaternion rot = Quaternion.LookRotation(normal);
+                GameObject go  = Instantiate(prefab, worldPos, rot);
+                float scale    = isHeadshot ? Random.Range(1.8f, 2.5f) : Random.Range(0.9f, 1.3f);
+                go.transform.localScale = Vector3.one * scale;
+                Destroy(go, 5f);
+
+                // [2] Headshot: secondo burst ancora più grande per l'effetto dramatico
+                if (isHeadshot)
+                {
+                    var prefab2 = hitBloodBurstPrefabs[Random.Range(0, hitBloodBurstPrefabs.Length)];
+                    if (prefab2 != null)
+                    {
+                        GameObject go2 = Instantiate(prefab2, worldPos + normal * 0.05f,
+                                                     Quaternion.LookRotation(normal) * Quaternion.Euler(Random.Range(-20f, 20f), Random.Range(-20f, 20f), 0));
+                        go2.transform.localScale = Vector3.one * Random.Range(2.0f, 3.0f);
+                        Destroy(go2, 5f);
+                    }
+                }
+
+                // [3] Piccolo burst "uscita proiettile" sul lato opposto del corpo
+                var exitPrefab = hitBloodBurstPrefabs[Random.Range(0, hitBloodBurstPrefabs.Length)];
+                if (exitPrefab != null)
+                {
+                    Vector3 exitPos = worldPos - normal * 0.28f;
+                    GameObject exitGo = Instantiate(exitPrefab, exitPos, Quaternion.LookRotation(-normal));
+                    exitGo.transform.localScale = Vector3.one * Random.Range(0.4f, 0.7f);
+                    Destroy(exitGo, 4f);
+                }
+
+                return;
+            }
         }
-    }
 
-    // ── SPLASH DI SANGUE ALL'IMPATTO ──────────────────────────────────────────
-
-    void SpawnBloodBurst(Vector3 worldPos, Vector3 normal)
-    {
+        // Fallback procedurale
         GameObject obj = new GameObject("BloodBurst");
         obj.transform.position = worldPos;
         obj.transform.rotation = Quaternion.LookRotation(normal);
@@ -166,107 +180,99 @@ public class GunHitDetector : MonoBehaviour
         ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
         var main             = ps.main;
-        main.duration        = 0.12f;
+        main.duration        = 0.15f;
         main.loop            = false;
-        main.startLifetime   = new ParticleSystem.MinMaxCurve(0.15f, 0.45f);
-        main.startSpeed      = new ParticleSystem.MinMaxCurve(0.5f, 2.5f);
-        main.startSize       = new ParticleSystem.MinMaxCurve(0.01f, 0.03f);
+        main.startLifetime   = new ParticleSystem.MinMaxCurve(0.3f, 0.8f);
+        main.startSpeed      = new ParticleSystem.MinMaxCurve(1.5f, 5f);
+        main.startSize       = new ParticleSystem.MinMaxCurve(isHeadshot ? 0.06f : 0.03f, isHeadshot ? 0.16f : 0.09f);
         main.startColor      = new ParticleSystem.MinMaxGradient(
-                                   new Color(0.9f, 0f, 0f, 1f),
-                                   new Color(0.4f, 0f, 0f, 1f));
-        main.gravityModifier = 0.8f;
+                                   new Color(0.85f, 0f, 0f, 1f),
+                                   new Color(0.35f, 0f, 0f, 1f));
+        main.gravityModifier = 2.5f;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
-        main.maxParticles    = 30;
+        main.maxParticles    = isHeadshot ? 120 : 60;
 
         var em = ps.emission;
         em.rateOverTime = 0f;
-        em.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)10, (short)20) });
+        em.SetBursts(new[] { new ParticleSystem.Burst(0f, isHeadshot ? (short)60 : (short)25,
+                                                           isHeadshot ? (short)80 : (short)40) });
 
         var sh = ps.shape;
         sh.enabled   = true;
         sh.shapeType = ParticleSystemShapeType.Cone;
-        sh.angle     = 40f;
-        sh.radius    = 0.005f;
+        sh.angle     = isHeadshot ? 75f : 55f;
+        sh.radius    = 0.01f;
 
         ApplyMat(ps, _bloodMat);
         ps.Play();
-        Destroy(obj, 1.5f);
+        Destroy(obj, 2f);
     }
 
-    // ── GOCCE CHE COLANO ─────────────────────────────────────────────────────
-
-    void SpawnBloodDrip(Transform bone, Vector3 worldPos)
-    {
-        GameObject obj = new GameObject("BloodDrip");
-        obj.transform.position = worldPos;
-        // FleshWound per tracking senza gerarchia → DetachBoneDecals non lo tocca
-        var tracker = obj.AddComponent<FleshWound>();
-        tracker.Init(bone, worldPos, Quaternion.identity, 6f);
-
-        ParticleSystem ps = obj.AddComponent<ParticleSystem>();
-        ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-
-        var main             = ps.main;
-        main.duration        = 4f;
-        main.loop            = false;
-        main.startLifetime   = new ParticleSystem.MinMaxCurve(0.5f, 2.0f);
-        main.startSpeed      = new ParticleSystem.MinMaxCurve(0.01f, 0.1f);
-        main.startSize       = new ParticleSystem.MinMaxCurve(0.008f, 0.022f);
-        main.startColor      = new ParticleSystem.MinMaxGradient(
-                                   new Color(0.8f, 0f, 0f, 1f),
-                                   new Color(0.3f, 0f, 0f, 1f));
-        main.gravityModifier = 3f;
-        main.simulationSpace = ParticleSystemSimulationSpace.World;
-        main.maxParticles    = 60;
-
-        var em = ps.emission;
-        em.rateOverTime = new ParticleSystem.MinMaxCurve(3f, 6f);
-        em.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)4, (short)7) });
-
-        var sh = ps.shape;
-        sh.enabled   = true;
-        sh.shapeType = ParticleSystemShapeType.Sphere;
-        sh.radius    = 0.003f;
-
-        var vel   = ps.velocityOverLifetime;
-        vel.enabled = true;
-        vel.space = ParticleSystemSimulationSpace.World;
-        vel.x     = new ParticleSystem.MinMaxCurve(-0.02f, 0.02f);
-        vel.y     = new ParticleSystem.MinMaxCurve(-0.25f, -0.05f);
-        vel.z     = new ParticleSystem.MinMaxCurve(-0.02f, 0.02f);
-
-        ApplyMat(ps, _bloodMat);
-        ps.Play();
-        Destroy(obj, 6f);
-    }
-
-    // ── KRIPTOFX: DECAL ATTACCATO ALLA BONE ──────────────────────────────────
-    // La root di AttachedBloodDecal NON ha Renderer → DetachBoneDecals() non lo stacca
-    // Il prefab segue il ragdoll restando figlio della bone
+    // ── DECAL ATTACCATO ALLA BONE (KriptoFX AttachedBloodDecal) ──────────────
 
     void SpawnAttachedBloodDecal(Vector3 worldPos, Vector3 normal, Transform bone)
     {
         if (attachedBloodDecalPrefab == null || bone == null) return;
 
+        // [5] Decal che si accumula: scala cresce con i colpi (0.9 → 1.1 → 1.3 → 1.5)
+        float accumScale = Random.Range(0.7f, 1.1f) + _shotCount * 0.2f;
+        accumScale = Mathf.Clamp(accumScale, 0.7f, 2.2f);
+
         GameObject go = Instantiate(attachedBloodDecalPrefab);
-        go.transform.position     = worldPos;
-        go.transform.localScale   = Vector3.one * Random.Range(0.8f, 1.4f);
+        go.transform.position   = worldPos;
+        go.transform.localScale = Vector3.one * accumScale;
         go.transform.LookAt(worldPos + normal, Vector3.up);
         go.transform.Rotate(90f, 0f, 0f);
-        go.transform.parent = bone;    // segue il ragdoll
+        go.transform.parent = bone;
         Destroy(go, 25f);
     }
 
-    // ── KRIPTOFX: SCHIZZO DI SANGUE A TERRA ──────────────────────────────────
+    // ── GOCCE DI SANGUE CHE CADONO ────────────────────────────────────────────
 
-    void SpawnFloorBloodSplatter(EnemyHealth zombie)
+    void SpawnBloodDrip(Transform bone, Vector3 worldPos)
     {
-        if (hitBloodSplatterPrefabs == null || hitBloodSplatterPrefabs.Length == 0) return;
+        if (bone == null) return;
 
-        // Parte da un punto DENTRO il root collider → Physics non rileva il collider
-        // stesso dall'interno → il primo hit è il pavimento reale
-        Vector3 origin = zombie.transform.position + Vector3.up * 0.3f;
+        GameObject obj = new GameObject("BloodDrip");
+        obj.transform.position = worldPos;
+        var tracker = obj.AddComponent<FleshWound>();
+        tracker.Init(bone, worldPos, Quaternion.identity, 8f);
 
+        ParticleSystem ps = obj.AddComponent<ParticleSystem>();
+        ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+        var main             = ps.main;
+        main.duration        = 5f;
+        main.loop            = false;
+        main.startLifetime   = new ParticleSystem.MinMaxCurve(0.8f, 2.5f);
+        main.startSpeed      = new ParticleSystem.MinMaxCurve(0.05f, 0.4f);
+        main.startSize       = new ParticleSystem.MinMaxCurve(0.02f, 0.05f);
+        main.startColor      = new ParticleSystem.MinMaxGradient(
+                                   new Color(0.8f, 0f, 0f, 1f),
+                                   new Color(0.3f, 0f, 0f, 1f));
+        main.gravityModifier = 4f;
+        main.simulationSpace = ParticleSystemSimulationSpace.World;
+        main.maxParticles    = 80;
+
+        var em = ps.emission;
+        em.rateOverTime = new ParticleSystem.MinMaxCurve(8f, 14f);
+        em.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)8, (short)12) });
+
+        var sh = ps.shape;
+        sh.enabled   = true;
+        sh.shapeType = ParticleSystemShapeType.Sphere;
+        sh.radius    = 0.005f;
+
+        ApplyMat(ps, _bloodMat);
+        ps.Play();
+        Destroy(obj, 8f);
+    }
+
+    // ── SCHIZZO A TERRA (KriptoFX) + MACCHIA PERSISTENTE ────────────────────
+
+    void SpawnGroundBloodSplatter(Vector3 zombiePos)
+    {
+        Vector3 origin = zombiePos + Vector3.up * 0.3f;
         RaycastHit[] hits = Physics.RaycastAll(origin, Vector3.down, 3f,
                                                ~(1 << 2), QueryTriggerInteraction.Ignore);
         System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
@@ -275,19 +281,104 @@ public class GunHitDetector : MonoBehaviour
         {
             if (h.collider.GetComponentInParent<EnemyHealth>() != null) continue;
 
-            var prefab = hitBloodSplatterPrefabs[Random.Range(0, hitBloodSplatterPrefabs.Length)];
-            if (prefab == null) return;
+            // KriptoFX: effetto animato di schizzo
+            if (hitBloodSplatterPrefabs != null && hitBloodSplatterPrefabs.Length > 0)
+            {
+                var prefab = hitBloodSplatterPrefabs[Random.Range(0, hitBloodSplatterPrefabs.Length)];
+                if (prefab != null)
+                {
+                    float angle = Mathf.Atan2(h.normal.x, h.normal.z) * Mathf.Rad2Deg + 180f;
+                    GameObject go = Instantiate(prefab, h.point, Quaternion.Euler(0f, angle + 90f, 0f));
+                    var settings = go.GetComponent<BFX_BloodSettings>();
+                    if (settings != null) settings.AnimationSpeed = Random.Range(0.8f, 1.2f);
+                    Destroy(go, 15f);
+                }
+            }
 
-            float angle = Mathf.Atan2(h.normal.x, h.normal.z) * Mathf.Rad2Deg + 180f;
-            GameObject go = Instantiate(prefab, h.point, Quaternion.Euler(0f, angle + 90f, 0f));
-
-            var settings = go.GetComponent<BFX_BloodSettings>();
-            if (settings != null)
-                settings.AnimationSpeed = Random.Range(0.8f, 1.2f);
-
-            Destroy(go, 20f);
+            // Macchia persistente: quad circolare piatto che rimane a terra
+            SpawnPersistentBloodStain(h.point, h.normal);
             return;
         }
+    }
+
+    // Quad circolare piatto con texture di sangue — rimane a terra 120 secondi
+    void SpawnPersistentBloodStain(Vector3 floorPoint, Vector3 floorNormal)
+    {
+        GameObject stain = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        Destroy(stain.GetComponent<MeshCollider>());
+        stain.name = "BloodStain";
+
+        // Ruotato orizzontale sul pavimento, rotazione casuale attorno all'asse normale
+        stain.transform.rotation = Quaternion.FromToRotation(Vector3.forward, floorNormal)
+                                   * Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+        stain.transform.position = floorPoint + floorNormal * 0.012f;
+
+        float size = Random.Range(0.25f, 0.55f);
+        stain.transform.localScale = new Vector3(size, size, 1f);
+
+        var rend = stain.GetComponent<Renderer>();
+        rend.material  = BuildStainMaterial();
+        rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+        Destroy(stain, 120f);
+    }
+
+    static Material BuildStainMaterial()
+    {
+        Texture2D tex = CreateBloodStainTexture(128);
+
+        // Sprites/Default è l'unico shader garantito trasparente su qualsiasi pipeline
+        Shader s = Shader.Find("Sprites/Default")
+                ?? Shader.Find("Unlit/Transparent")
+                ?? Shader.Find("Universal Render Pipeline/Particles/Unlit");
+        if (s == null) return null;
+
+        var mat = new Material(s);
+        mat.mainTexture = tex;
+        if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
+        if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
+        mat.color = Color.white;
+        mat.renderQueue = 3000;
+        return mat;
+    }
+
+    static Texture2D CreateBloodStainTexture(int size)
+    {
+        var tex    = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var pixels = new Color[size * size];
+        float cx = size * 0.5f, cy = size * 0.5f;
+
+        // Genera forma organica con rumore
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float nx = (x - cx) / (size * 0.5f);
+            float ny = (y - cy) / (size * 0.5f);
+            float d  = Mathf.Sqrt(nx * nx + ny * ny);
+
+            // Bordo irregolare con pseudo-rumore
+            float angle  = Mathf.Atan2(ny, nx);
+            float jitter = 0.12f * Mathf.Sin(angle * 7f) + 0.08f * Mathf.Sin(angle * 13f + 1f);
+            float edge   = 0.78f + jitter;
+
+            Color c;
+            if (d < edge * 0.55f)
+                c = new Color(0.18f, 0.01f, 0.01f, 0.92f);   // centro scuro
+            else if (d < edge)
+            {
+                float t = (d - edge * 0.55f) / (edge * 0.45f);
+                float a = Mathf.Lerp(0.90f, 0f, t * t);
+                c = new Color(0.22f, 0.02f, 0.02f, a);         // bordo sfumato
+            }
+            else
+                c = Color.clear;
+
+            pixels[y * size + x] = c;
+        }
+
+        tex.SetPixels(pixels);
+        tex.Apply();
+        return tex;
     }
 
     // ── BULLET HOLE NORMALE (muri / oggetti) ──────────────────────────────────
@@ -304,8 +395,6 @@ public class GunHitDetector : MonoBehaviour
 
     static Transform FindNearestBone(EnemyHealth zombie, Vector3 worldPos)
     {
-        // 1. Trova il Transform più vicino fra TUTTI i figli (compresi gli intermedi)
-        //    → posizionamento ferita preciso (non solo le bone con Rigidbody)
         float minDist = float.MaxValue;
         Transform nearestTransform = null;
         foreach (Transform t in zombie.GetComponentsInChildren<Transform>())
@@ -314,102 +403,32 @@ public class GunHitDetector : MonoBehaviour
             float d = Vector3.Distance(t.position, worldPos);
             if (d < minDist) { minDist = d; nearestTransform = t; }
         }
-
         if (nearestTransform == null) return null;
 
-        // 2. Per il tracking ragdoll serve un Rigidbody:
-        //    risali la gerarchia dal transform trovato fino a trovare un antenato con RB
         Transform t2 = nearestTransform;
         while (t2 != null && t2 != zombie.transform)
         {
             if (t2.GetComponent<Rigidbody>() != null) return t2;
             t2 = t2.parent;
         }
-
-        return nearestTransform; // fallback
+        return nearestTransform;
     }
 
-    static Material BuildMaterial(Color color)
+    static Material BuildBloodMaterial()
     {
-        Shader s = Shader.Find("Universal Render Pipeline/Unlit")
-                ?? Shader.Find("Unlit/Color")
+        Shader s = Shader.Find("Universal Render Pipeline/Particles/Unlit")
                 ?? Shader.Find("Sprites/Default")
-                ?? Shader.Find("Standard");
-
-        if (s == null) return null;
-        var mat = new Material(s);
-        mat.color = color;
-        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
-        if (mat.HasProperty("_Color"))     mat.SetColor("_Color",     color);
-        return mat;
-    }
-
-    /// <summary>
-    /// Crea un materiale con texture circolare scura generata in codice.
-    /// Centro nero (foro), anello rosso sangue, bordo sfumato trasparente.
-    /// Usa Sprites/Default che supporta RGBA trasparente in qualsiasi pipeline.
-    /// </summary>
-    static Material BuildCircularWoundMaterial()
-    {
-        Texture2D tex = CreateWoundTexture(64);
-
-        Shader s = Shader.Find("Sprites/Default")
-                ?? Shader.Find("Unlit/Transparent")
-                ?? Shader.Find("Universal Render Pipeline/Unlit");
-
+                ?? Shader.Find("Unlit/Color");
         if (s == null) return null;
 
         var mat = new Material(s);
-        mat.mainTexture = tex;
-        if (mat.HasProperty("_MainTex"))  mat.SetTexture("_MainTex",  tex);
-        if (mat.HasProperty("_BaseMap"))  mat.SetTexture("_BaseMap",  tex);
-        mat.color = Color.white;   // la texture controlla già il colore
+        Color c = new Color(0.75f, 0f, 0f, 1f);
+        mat.color = c;
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", c);
+        if (mat.HasProperty("_Color"))     mat.SetColor("_Color", c);
+        mat.SetInt("_ZWrite", 0);
+        mat.renderQueue = 3001;
         return mat;
-    }
-
-    /// <summary>
-    /// Genera una texture circolare: foro scuro al centro, sangue rosso intorno, bordo trasparente.
-    /// </summary>
-    static Texture2D CreateWoundTexture(int size = 64)
-    {
-        var tex    = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        var pixels = new Color[size * size];
-        float cx = size * 0.5f, cy = size * 0.5f;
-        float coreR  = size * 0.20f;   // foro centrale scuro
-        float bloodR = size * 0.36f;   // anello di sangue
-        float outerR = size * 0.48f;   // bordo sfumato
-
-        for (int y = 0; y < size; y++)
-        for (int x = 0; x < size; x++)
-        {
-            float d = Mathf.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
-            Color c;
-            if (d <= coreR)
-            {
-                c = new Color(0.02f, 0f, 0f, 1f);                              // foro
-            }
-            else if (d <= bloodR)
-            {
-                float t = (d - coreR) / (bloodR - coreR);
-                c = Color.Lerp(new Color(0.05f, 0f, 0f, 1f),
-                               new Color(0.20f, 0.01f, 0.01f, 1f), t);        // sangue
-            }
-            else if (d <= outerR)
-            {
-                float t = (d - bloodR) / (outerR - bloodR);
-                float a = Mathf.Lerp(0.85f, 0f, t * t);
-                c = new Color(0.12f, 0.01f, 0.01f, a);                        // sfumatura
-            }
-            else
-            {
-                c = Color.clear;
-            }
-            pixels[y * size + x] = c;
-        }
-
-        tex.SetPixels(pixels);
-        tex.Apply();
-        return tex;
     }
 
     static void ApplyMat(ParticleSystem ps, Material mat)

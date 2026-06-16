@@ -963,10 +963,31 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   muzzlePoint: {fileID: 2072378621}
-  damagePerShot: 0
+  damagePerShot: 25
   maxRange: 150
-  attachedBloodDecalPrefab: {fileID: 0}
-  hitBloodSplatterPrefabs: []
+  hitBloodBurstPrefabs:
+  - {fileID: 2656253210798625995, guid: a78e9ef18b366424b84e0c7410d2fe72, type: 3}
+  - {fileID: 5865290276592450837, guid: 42a28376f729c864a81abf66add7a418, type: 3}
+  - {fileID: 4288107571095694937, guid: c3f8938673a07704e93ac52eee18f410, type: 3}
+  - {fileID: 1165703760847671896, guid: bb596cd440832554089a7125852e836f, type: 3}
+  - {fileID: 4152240900433254336, guid: 6d3629f845b40e24fb51d381e84bbc77, type: 3}
+  - {fileID: 6463355840203370170, guid: 70ead61ff20b23b4e97b90d8e8997ecd, type: 3}
+  - {fileID: 5170585893340993107, guid: 7b88f11816abaa34c9e02cbaa8485321, type: 3}
+  - {fileID: 2629016494315086251, guid: 5776aed3bb070e54cb09a11c8a6a5831, type: 3}
+  - {fileID: 3034872428933141512, guid: 52d94bfe44b09ff4b9e9788e9a86a778, type: 3}
+  - {fileID: 2360933683143488451, guid: 730678b8a5330c449ada55bde83402ce, type: 3}
+  attachedBloodDecalPrefab: {fileID: 3136605153214515430, guid: 45eef0a861a8a8946b4c23fb9f4f779a, type: 3}
+  hitBloodSplatterPrefabs:
+  - {fileID: 2232662728709046839, guid: 5b81b9f1fd600654991c314e95e9e692, type: 3}
+  - {fileID: 2777858941450950115, guid: ab54333c20d70fe4790b4ed80fa379c3, type: 3}
+  - {fileID: 77058900600929839, guid: acf69c953b1128942940a6232fdd13a4, type: 3}
+  - {fileID: 601888051444063829, guid: 5339ff807832c584588ae41b9a03031a, type: 3}
+  - {fileID: 3946118420084744930, guid: 6f2c67e8712b59e428670b60a6f76079, type: 3}
+  - {fileID: 8967264388286551387, guid: 75f2e05292738d242a060d01657a4ce5, type: 3}
+  - {fileID: 3811830185050289365, guid: e6fa56a2b92362444b3126359c9cd6a0, type: 3}
+  - {fileID: 1172649150807526450, guid: 696ec32829bb413498cef4215a2a1926, type: 3}
+  - {fileID: 6336764993931662720, guid: 5b8d837486736c04b8ccafd0fda0c08d, type: 3}
+  - {fileID: 5686874741564713218, guid: 9109dc39405e94241b88fba387ab4297, type: 3}
 --- !u!4 &251212159 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 6024261396410624979, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
@@ -999,34 +1020,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 80832509aace3374b930e77f8992ad20, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
---- !u!114 &251212162
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 251212126}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a68d1d3866d42c5479d0d13bf36a21fe, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  muzzlePoint: {fileID: 0}
-  damagePerShot: 25
-  maxRange: 150
-  attachedBloodDecalPrefab: {fileID: 3136605153214515430, guid: 45eef0a861a8a8946b4c23fb9f4f779a, type: 3}
-  hitBloodSplatterPrefabs:
-  - {fileID: 2656253210798625995, guid: a78e9ef18b366424b84e0c7410d2fe72, type: 3}
-  - {fileID: 5865290276592450837, guid: 42a28376f729c864a81abf66add7a418, type: 3}
-  - {fileID: 4288107571095694937, guid: c3f8938673a07704e93ac52eee18f410, type: 3}
-  - {fileID: 1165703760847671896, guid: bb596cd440832554089a7125852e836f, type: 3}
-  - {fileID: 4152240900433254336, guid: 6d3629f845b40e24fb51d381e84bbc77, type: 3}
-  - {fileID: 6463355840203370170, guid: 70ead61ff20b23b4e97b90d8e8997ecd, type: 3}
-  - {fileID: 5170585893340993107, guid: 7b88f11816abaa34c9e02cbaa8485321, type: 3}
-  - {fileID: 2629016494315086251, guid: 5776aed3bb070e54cb09a11c8a6a5831, type: 3}
-  - {fileID: 3034872428933141512, guid: 52d94bfe44b09ff4b9e9788e9a86a778, type: 3}
-  - {fileID: 2360933683143488451, guid: 730678b8a5330c449ada55bde83402ce, type: 3}
-  - {fileID: 5016170632959171363, guid: c3ed06559a66b724b91c3124e75ddec9, type: 3}
+
 --- !u!43 &277094700
 Mesh:
   m_ObjectHideFlags: 0
@@ -1783,6 +1777,14 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: 4567605641618450651, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
+      propertyPath: FiringMethod
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4567605641618450651, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
+      propertyPath: FiringRate
+      value: 0.25
+      objectReference: {fileID: 0}
+    - target: {fileID: 4567605641618450651, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
       propertyPath: InternalAmmo
       value: 0
       objectReference: {fileID: 0}
@@ -1941,9 +1943,6 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 6024261396410624980, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
       insertIndex: -1
       addedObject: {fileID: 251212161}
-    - targetCorrespondingSourceObject: {fileID: 6024261396410624980, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 251212162}
   m_SourcePrefab: {fileID: 100100000, guid: 6e987ed47215b3a46af930a293e59f19, type: 3}
 --- !u!43 &539901524
 Mesh:
