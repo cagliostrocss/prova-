@@ -17,8 +17,16 @@ public class EnemyHealth : MonoBehaviour
     private Rigidbody[] ragdollRigidbodies;
     private Collider[] ragdollColliders;
 
+    [Header("Hit Animation")]
+    public float hitAnimCooldown = 1.5f;
+    public AnimationClip[] hitReactionClips;
+    private float _lastHitTime = -999f;
+
     public bool IsDead { get; private set; }
+    public bool IsHit  { get; private set; }
     private bool _trailStarted = false;
+    private int _hitStateCount = 14;
+    private string _currentHitState = "";
 
     void Start()
     {
@@ -35,7 +43,10 @@ public class EnemyHealth : MonoBehaviour
         // CullUpdateTransforms (default) può bloccare l'aggiornamento in VR se il frustum
         // non include lo zombi → ossa restano in T-pose al momento del ragdoll.
         if (animator != null)
+        {
             animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            animator.applyRootMotion = false;
+        }
 
         agent = GetComponent<NavMeshAgent>();
         ragdollRigidbodies = GetComponentsInChildren<Rigidbody>();
@@ -66,9 +77,16 @@ public class EnemyHealth : MonoBehaviour
         foreach (Collider col in ragdollColliders)
         {
             if (col.gameObject == this.gameObject)
+            {
+                // Root capsule: attivo solo quando ragdoll è spento
                 col.enabled = !active;
+            }
             else
-                col.enabled = active;
+            {
+                // Collider delle ossa sempre abilitati: permettono ai proiettili di colpire
+                // anche con ragdoll spento. I Rigidbody kinematic impediscono già la fisica.
+                col.enabled = true;
+            }
         }
     }
 
@@ -77,6 +95,7 @@ public class EnemyHealth : MonoBehaviour
         if (IsDead) return;
         currentHealth -= damage;
         Debug.Log($"[EnemyHealth] TakeDamage {damage} → HP rimanenti: {currentHealth}");
+        TryPlayHitAnimation();
         if (currentHealth <= 0) Die();
     }
 
@@ -91,6 +110,9 @@ public class EnemyHealth : MonoBehaviour
             hitReaction = FindNearestBoneHitReaction(hitPoint);
         hitReaction?.ApplyHitForce(hitDirection, 150f);
 
+        // Animazione hit reaction con cooldown (non riparte se già in corso)
+        TryPlayHitAnimation();
+
         // [3] Avvia scia di sangue al primo colpo ricevuto
         if (!_trailStarted) { _trailStarted = true; StartCoroutine(BloodTrailCoroutine()); }
 
@@ -100,6 +122,67 @@ public class EnemyHealth : MonoBehaviour
     public void TakeDamage(float damage, Vector3 hitDirection, Collider hitCollider)
     {
         TakeDamage(damage, hitDirection, hitCollider.transform.position, hitCollider);
+    }
+
+    void TryPlayHitAnimation()
+    {
+        if (animator == null) return;
+        if (Time.time - _lastHitTime < hitAnimCooldown) return;
+        _lastHitTime = Time.time;
+        StartCoroutine(PlayHitCoroutine());
+    }
+
+    IEnumerator PlayHitCoroutine()
+    {
+        _currentHitState = "hit" + Random.Range(0, _hitStateCount);
+        animator.applyRootMotion = false;
+        animator.ResetTrigger("Hit");
+        animator.Play(_currentHitState, 0, 0f);
+        StartCoroutine(PauseAgentDuringHit());
+        yield break;
+    }
+
+    IEnumerator PauseAgentDuringHit()
+    {
+        IsHit = true;
+        Vector3 lockedPos = transform.position;
+        if (agent != null) { agent.isStopped = true; agent.ResetPath(); }
+
+        // Aspetta più frame per far stabilizzare il controller dopo l'assegnazione
+        yield return null;
+        yield return null;
+        yield return null;
+
+        // Aspetta prima che lo stato hit sia effettivamente entrato
+        float waitStart = Time.time;
+        while (animator != null && !IsDead && !animator.GetCurrentAnimatorStateInfo(0).IsName(_currentHitState))
+        {
+            if (Time.time - waitStart > 0.5f) break; // safety
+            yield return null;
+        }
+
+        // Ora aspetta che l'animazione hit finisca
+        while (animator != null && !IsDead)
+        {
+            var info = animator.GetCurrentAnimatorStateInfo(0);
+            if (agent != null) agent.Warp(lockedPos);
+            if (!info.IsName(_currentHitState)) break; // uscito dallo stato
+            if (info.normalizedTime >= 0.95f) break;   // finita
+            if (Time.time - _lastHitTime > 5f) break;  // safety timeout massimo 5s
+            yield return null;
+        }
+
+        if (!IsDead)
+        {
+            if (agent != null) { agent.isStopped = false; agent.Warp(lockedPos); }
+            if (animator != null)
+            {
+                animator.applyRootMotion = false;
+                animator.ResetTrigger("Hit");
+                animator.Play("walk", 0, 0f);
+            }
+        }
+        IsHit = false;
     }
 
     HitReaction FindNearestBoneHitReaction(Vector3 point)
