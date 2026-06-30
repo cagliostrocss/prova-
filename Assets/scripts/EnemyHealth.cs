@@ -22,10 +22,19 @@ public class EnemyHealth : MonoBehaviour
     public AnimationClip[] hitReactionClips;
     private float _lastHitTime = -999f;
 
+    [Header("Knockback")]
+    [Range(0f, 5f)]   public float knockbackForce    = 2f;
+    [Range(0f, 0.5f)] public float knockbackDuration = 0.2f;
+
+    [Header("Death Transition")]
+    [Range(0f, 1f)] public float deathBlendDuration = 0.4f;
+
+
     public bool IsDead { get; private set; }
     public bool IsHit  { get; private set; }
+    private Vector3 _deathVelocity;
     private bool _trailStarted = false;
-    private int _hitStateCount = 14;
+    private int _hitStateCount = 9;
     private string _currentHitState = "";
 
     void Start()
@@ -110,11 +119,13 @@ public class EnemyHealth : MonoBehaviour
             hitReaction = FindNearestBoneHitReaction(hitPoint);
         hitReaction?.ApplyHitForce(hitDirection, 150f);
 
-        // Animazione hit reaction con cooldown (non riparte se già in corso)
+        // Knockback fisico — spinge l'NPC nella direzione del colpo
+        if (!IsDead) StartCoroutine(ApplyKnockback(hitDirection));
+
         TryPlayHitAnimation();
 
-        // [3] Avvia scia di sangue al primo colpo ricevuto
-        if (!_trailStarted) { _trailStarted = true; StartCoroutine(BloodTrailCoroutine()); }
+        // Scia di sangue disabilitata temporaneamente
+        // if (!_trailStarted) { _trailStarted = true; StartCoroutine(BloodTrailCoroutine()); }
 
         if (currentHealth <= 0) Die();
     }
@@ -124,20 +135,33 @@ public class EnemyHealth : MonoBehaviour
         TakeDamage(damage, hitDirection, hitCollider.transform.position, hitCollider);
     }
 
+    IEnumerator ApplyKnockback(Vector3 hitDirection)
+    {
+        if (agent == null || !agent.enabled) yield break;
+        Vector3 push = new Vector3(hitDirection.x, 0f, hitDirection.z).normalized * knockbackForce;
+        float elapsed = 0f;
+        while (elapsed < knockbackDuration && !IsDead)
+        {
+            if (agent.enabled) agent.Move(push * Time.deltaTime);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+    }
+
     void TryPlayHitAnimation()
     {
         if (animator == null) return;
         if (Time.time - _lastHitTime < hitAnimCooldown) return;
         _lastHitTime = Time.time;
+        _currentHitState = "hit" + Random.Range(0, _hitStateCount);
         StartCoroutine(PlayHitCoroutine());
     }
 
     IEnumerator PlayHitCoroutine()
     {
-        _currentHitState = "hit" + Random.Range(0, _hitStateCount);
         animator.applyRootMotion = false;
         animator.ResetTrigger("Hit");
-        animator.Play(_currentHitState, 0, 0f);
+        animator.CrossFadeInFixedTime(_currentHitState, 0.15f);
         StartCoroutine(PauseAgentDuringHit());
         yield break;
     }
@@ -145,42 +169,31 @@ public class EnemyHealth : MonoBehaviour
     IEnumerator PauseAgentDuringHit()
     {
         IsHit = true;
-        Vector3 lockedPos = transform.position;
-        if (agent != null) { agent.isStopped = true; agent.ResetPath(); }
+        Vector3 posAtHit = transform.position;
+        if (agent != null) agent.enabled = false;
 
-        // Aspetta più frame per far stabilizzare il controller dopo l'assegnazione
-        yield return null;
-        yield return null;
-        yield return null;
+        yield return new WaitForSeconds(0.2f);
 
-        // Aspetta prima che lo stato hit sia effettivamente entrato
-        float waitStart = Time.time;
-        while (animator != null && !IsDead && !animator.GetCurrentAnimatorStateInfo(0).IsName(_currentHitState))
-        {
-            if (Time.time - waitStart > 0.5f) break; // safety
-            yield return null;
-        }
-
-        // Ora aspetta che l'animazione hit finisca
-        while (animator != null && !IsDead)
+        float safety = 0f;
+        while (!IsDead && safety < 3f)
         {
             var info = animator.GetCurrentAnimatorStateInfo(0);
-            if (agent != null) agent.Warp(lockedPos);
-            if (!info.IsName(_currentHitState)) break; // uscito dallo stato
-            if (info.normalizedTime >= 0.95f) break;   // finita
-            if (Time.time - _lastHitTime > 5f) break;  // safety timeout massimo 5s
+            if (info.normalizedTime >= 1f) break;
+            safety += Time.deltaTime;
             yield return null;
         }
 
-        if (!IsDead)
+        if (!IsDead && animator != null)
         {
-            if (agent != null) { agent.isStopped = false; agent.Warp(lockedPos); }
-            if (animator != null)
-            {
-                animator.applyRootMotion = false;
-                animator.ResetTrigger("Hit");
-                animator.Play("walk", 0, 0f);
-            }
+            animator.applyRootMotion = false;
+            animator.ResetTrigger("Hit");
+            animator.CrossFadeInFixedTime("walk", 0.5f);
+        }
+
+        if (agent != null)
+        {
+            agent.enabled = true;
+            agent.Warp(posAtHit);
         }
         IsHit = false;
     }
@@ -248,12 +261,16 @@ public class EnemyHealth : MonoBehaviour
     {
         IsDead = true;
         Debug.Log("[EnemyHealth] Die() chiamato — zombi morto.");
+
+        // Cattura velocità prima di disabilitare l'agente — serve per il momentum del ragdoll
+        _deathVelocity = agent != null ? agent.velocity : Vector3.zero;
+
         if (agent != null) agent.enabled = false;
         EnemyAI enemyAI = GetComponent<EnemyAI>();
         if (enemyAI != null) enemyAI.enabled = false;
 
-        // Pool di sangue a terra dalla morte (KriptoFX)
-        SpawnDeathBloodPool();
+        // La pozza di sangue a terra viene creata gradualmente dal cadavere che
+        // continua a sanguinare (GroundDeathRoutine), non più un decal piazzato qui.
 
         // Forza tutti i SkinnedMeshRenderer ad aggiornarsi sempre.
         // Con updateWhenOffscreen=false (default Unity), quando le ossa del busto
@@ -269,38 +286,85 @@ public class EnemyHealth : MonoBehaviour
         StartCoroutine(ActivateRagdollNextFrame());
     }
 
+    // Pozza di morte: quad piatti di geometria reale (stabili, non ondeggiano con
+    // la camera), che restano a terra 60 secondi. Niente spray esplosivo KriptoFX.
     void SpawnDeathBloodPool()
     {
-        if (deathBloodPrefabs == null || deathBloodPrefabs.Length == 0) return;
-
         Vector3 origin = transform.position + Vector3.up * 0.1f;
         if (!Physics.Raycast(origin, Vector3.down, out RaycastHit groundHit, 2f,
                 ~(1 << 2), QueryTriggerInteraction.Ignore)) return;
         if (groundHit.collider.GetComponentInParent<EnemyHealth>() != null) return;
 
-        float baseAngle = Mathf.Atan2(groundHit.normal.x, groundHit.normal.z) * Mathf.Rad2Deg + 180f;
+        Material poolMat = GetPoolMaterial();
+        if (poolMat == null) return;
 
-        // [4] Spawn 3 pozze sovrapposte per una macchia di morte più grande e drammatica
-        int poolCount = 3;
-        for (int i = 0; i < poolCount; i++)
+        // Un solo quad pulito, ben staccato dal pavimento per evitare z-fighting
+        var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        var col = quad.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        quad.name = "DeathBloodPool";
+
+        quad.transform.position = groundHit.point + groundHit.normal * 0.03f;
+        quad.transform.rotation = Quaternion.FromToRotation(Vector3.forward, groundHit.normal)
+                                * Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+        float size = Random.Range(0.55f, 0.8f);
+        quad.transform.localScale = new Vector3(size, size, 1f);
+
+        var rend = quad.GetComponent<Renderer>();
+        rend.sharedMaterial = poolMat;
+        rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        rend.receiveShadows = false;
+
+        Destroy(quad, 60f);
+    }
+
+    // Materiale pozza condiviso (creato una volta, riusato da tutti i nemici)
+    private static Material _poolMat;
+    static Material GetPoolMaterial()
+    {
+        if (_poolMat != null) return _poolMat;
+
+        Texture2D tex = BuildPoolTexture(256);
+        Shader s = Shader.Find("Sprites/Default")
+                ?? Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                ?? Shader.Find("Unlit/Transparent");
+        if (s == null) return null;
+        _poolMat = new Material(s);
+        _poolMat.mainTexture = tex;
+        if (_poolMat.HasProperty("_MainTex")) _poolMat.SetTexture("_MainTex", tex);
+        if (_poolMat.HasProperty("_BaseMap")) _poolMat.SetTexture("_BaseMap", tex);
+        _poolMat.renderQueue = 3000;
+        return _poolMat;
+    }
+
+    static Texture2D BuildPoolTexture(int size)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        float cx = size * 0.5f, cy = size * 0.5f;
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
         {
-            var prefab = deathBloodPrefabs[Random.Range(0, deathBloodPrefabs.Length)];
-            if (prefab == null) continue;
-
-            Vector3 offset = new Vector3(Random.Range(-0.15f, 0.15f), 0, Random.Range(-0.15f, 0.15f));
-            float angle    = baseAngle + Random.Range(-30f, 30f);
-            GameObject go  = Instantiate(prefab, groundHit.point + offset, Quaternion.Euler(0, angle + 90f, 0));
-            go.transform.localScale = Vector3.one * Random.Range(1.5f, 2.8f);
-
-            var settings = go.GetComponent<BFX_BloodSettings>();
-            if (settings != null)
+            float nx = (x - cx) / (size * 0.5f);
+            float ny = (y - cy) / (size * 0.5f);
+            float d  = Mathf.Sqrt(nx * nx + ny * ny);
+            float a  = Mathf.Atan2(ny, nx);
+            float edge = 0.82f + 0.10f * Mathf.Sin(a * 6f) + 0.06f * Mathf.Sin(a * 11f + 1f);
+            Color c;
+            if (d < edge * 0.7f)
+                c = new Color(0.22f, 0.01f, 0.01f, 0.95f);
+            else if (d < edge)
             {
-                settings.AutomaticGroundHeightDetection = true;
-                settings.AnimationSpeed = Random.Range(0.5f, 0.85f);
+                float t = (d - edge * 0.7f) / (edge * 0.3f);
+                c = new Color(0.26f, 0.02f, 0.02f, Mathf.Lerp(0.95f, 0f, t * t));
             }
-
-            Destroy(go, 30f);
+            else c = Color.clear;
+            px[y * size + x] = c;
         }
+        tex.SetPixels(px);
+        tex.Apply();
+        tex.wrapMode = TextureWrapMode.Clamp;
+        return tex;
     }
 
     // [3] Scia di sangue: gocce piccole a terra mentre lo zombi cammina ferito
@@ -335,22 +399,16 @@ public class EnemyHealth : MonoBehaviour
 
     IEnumerator ActivateRagdollNextFrame()
     {
-        yield return null;
+        // Fase 1: lascia girare l'animazione di morte per deathBlendDuration secondi
+        // Il personaggio mantiene la forma animata mentre inizia a cedere
+        if (animator != null) animator.applyRootMotion = false;
+        yield return new WaitForSeconds(deathBlendDuration);
 
-        // --- DIAGNOSTICA PRE-ATTIVAZIONE ---
-        foreach (Rigidbody rb in ragdollRigidbodies)
-        {
-            if (rb.gameObject == gameObject) continue;
-            if (rb.name == "mixamorig:Hips" || rb.name == "mixamorig:Spine")
-                Debug.Log($"[RD-PRE] {rb.name}: pos={rb.transform.position:F3} kinematic={rb.isKinematic}");
-        }
-
-        // LOG: conferma se l'Animator è stato trovato e viene effettivamente spento
-        Debug.Log($"[RD-Anim] animator={(animator != null ? animator.gameObject.name + " obj=" + animator.gameObject.GetInstanceID() : "NULL")}");
+        // Fase 2: disabilita l'animator e congela la posa corrente
+        Debug.Log($"[RD-Anim] animator={(animator != null ? animator.gameObject.name : "NULL")}");
         if (animator != null) animator.enabled = false;
-        Debug.Log($"[RD-Anim] dopo disable: enabled={animator?.enabled}");
 
-        // Sincronizza i transform col mondo fisico (necessario dopo aggiornamenti Animator)
+        // Sincronizza i transform col mondo fisico
         Physics.SyncTransforms();
 
         // Ricalcola gli anchor dei joint sulla posa corrente
@@ -359,38 +417,31 @@ public class EnemyHealth : MonoBehaviour
         DetachBoneDecals();
         SetRagdollActive(true);
 
-        // Gore Simulator: segnala la morte DOPO che il ragdoll BNG è attivo.
-        // Non chiamiamo ExecuteRagdoll() perché conflitterebbe con il nostro ragdoll.
-        // Usiamo NotifyDeath() se esiste, altrimenti ignoriamo.
-
-        // --- DIAGNOSTICA POST-ATTIVAZIONE ---
-        foreach (Rigidbody rb in ragdollRigidbodies)
-        {
-            if (rb.gameObject == gameObject) continue;
-            if (rb.name == "mixamorig:Hips" || rb.name == "mixamorig:Spine")
-                Debug.Log($"[RD-POST] {rb.name}: kinematic={rb.isKinematic} gravity={rb.useGravity} constraints={rb.constraints}");
-        }
-
-        // IMPORTANTE: AddForce chiamata nello stesso frame di isKinematic=false
-        // viene ignorata da PhysX (il body non è ancora reinizializzato come dinamico).
-        // Aspettiamo un FixedUpdate → PhysX ha processato il cambio di stato →
-        // la forza viene applicata correttamente.
+        // Fase 3: applica il momentum — aspetta un FixedUpdate per PhysX
         yield return new WaitForFixedUpdate();
 
-        // Sveglia tutte le ossa ed applica una velocità iniziale verso il basso.
-        // Senza questo, le gambe (pendolo) arrivano a terra in ~0.1s mentre il busto
-        // cade in caduta libera (~0.5s) — visivamente sembra che il busto galleggi.
-        // Con -3 m/s tutto il corpo collassa insieme entro ~0.3s.
         foreach (Rigidbody rb in ragdollRigidbodies)
         {
             if (rb.gameObject == gameObject || rb.isKinematic) continue;
             rb.WakeUp();
-            rb.AddForce(Vector3.down * 3f, ForceMode.VelocityChange);
+
+            // Applica velocità di morte (momentum della camminata) + leggera spinta verso il basso
+            Vector3 momentum = _deathVelocity * 0.6f + Vector3.down * 2f;
+            rb.AddForce(momentum, ForceMode.VelocityChange);
         }
 
         yield return new WaitForFixedUpdate();
         yield return new WaitForFixedUpdate();
 
-        Destroy(gameObject, 5f);
+        StartCoroutine(GroundDeathRoutine());
+    }
+
+    // Il cadavere resta a terra e dopo 60 secondi scompare.
+    // (La pozza di sangue che si allargava è stata rimossa per ora — verrà
+    //  reimplementata meglio in seguito.)
+    IEnumerator GroundDeathRoutine()
+    {
+        yield return new WaitForSeconds(60f);
+        Destroy(gameObject);
     }
 }

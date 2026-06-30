@@ -20,7 +20,7 @@ public class EnemyAI : MonoBehaviour
         if (player == null) return;
 
         var health = GetComponent<EnemyHealth>();
-        if (health != null && (health.IsHit || health.IsDead)) return;
+        if (health != null && (health.IsDead || health.IsHit)) return;
 
         float distance = Vector3.Distance(transform.position, player.position);
         // rimosso
